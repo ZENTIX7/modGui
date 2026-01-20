@@ -345,16 +345,17 @@ static void DrawBackgroundGradient(const ImVec2& pos, const ImVec2& size) {
                                        col_top, col_top, col_bottom, col_bottom);
 }
 
-static void DrawDebugOverlay(const AppState& state, float alpha_out, float alpha_in, const ImGuiIO& io) {
+static void DrawDebugOverlay(const AppState& state, bool transition_active, float transition_t, float alpha_out, float alpha_in, const ImGuiIO& io) {
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
-    ImGui::Begin("UI DEBUG", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::Text("UI DEBUG: if you see this, ImGui is rendering");
-    ImGui::Text("Current screen: %d", static_cast<int>(state.current));
-    ImGui::Text("Target screen: %d", static_cast<int>(state.target));
-    ImGui::Text("Transition: %.2f", state.transition);
-    ImGui::Text("Alpha out/in: %.2f / %.2f", alpha_out, alpha_in);
-    ImGui::Text("Window size: %.0f x %.0f", ImGui::GetWindowSize().x, ImGui::GetWindowSize().y);
+    ImGui::SetNextWindowSize(ImVec2(340, 180), ImGuiCond_Always);
+    ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    ImGui::Text("IMGUI DEBUG: YOU SHOULD SEE THIS");
     ImGui::Text("io.DisplaySize: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
+    ImGui::Text("io.DeltaTime: %.4f", io.DeltaTime);
+    ImGui::Text("current screen: %d", static_cast<int>(state.current));
+    ImGui::Text("transition.active: %s", transition_active ? "true" : "false");
+    ImGui::Text("transition.t: %.2f", transition_t);
+    ImGui::Text("alpha out/in: %.2f / %.2f", alpha_out, alpha_in);
     ImGui::End();
 }
 
@@ -492,6 +493,9 @@ static void CreateRenderTarget() {
         g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
         pBackBuffer->Release();
     }
+    if (!g_mainRenderTargetView) {
+        OutputDebugStringA("RenderTargetView is null after CreateRenderTarget\n");
+    }
 }
 
 static void CleanupRenderTarget() {
@@ -585,8 +589,8 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     // Gray/blank screen was caused by not actually rendering ImGui windows when alpha
-    // transitions effectively zeroed them out. This version ensures the login screen
-    // is always drawn and adds a debug overlay every frame.
+    // transitions effectively zeroed them out. This version enforces a debug overlay
+    // and disables transitions until UI is visible.
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr,
                       _T("ModGuiWindow"), nullptr };
@@ -667,6 +671,16 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
+        // Force transition inactive until UI is confirmed visible.
+        bool transition_active = false;
+        float transition_t = 1.0f;
+        float alpha_out = 1.0f;
+        float alpha_in = 1.0f;
+
+        // DEBUG WINDOW (always visible)
+        DrawDebugOverlay(state, transition_active, transition_t, alpha_out, alpha_in, io);
+
+        // MAIN UI
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
         ImGui::Begin("##root", nullptr,
@@ -681,40 +695,10 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui::SetCursorPos(ImVec2(0, kTitleBarHeight + 10.0f));
         ImGui::BeginChild("Content", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
 
-        float now = static_cast<float>(ImGui::GetTime());
-        if (state.transition < 1.0f) {
-            float t = (now - state.transition_start) / 0.35f;
-            state.transition = ClampFloat(t, 0.0f, 1.0f);
-            if (state.transition >= 1.0f) {
-                state.current = state.target;
-            }
-        }
-
-        float alpha_out = (state.transition < 1.0f) ? (1.0f - state.transition) : 1.0f;
-        float alpha_in = (state.transition < 1.0f) ? state.transition : 1.0f;
-        alpha_out = ClampFloat(alpha_out, 0.2f, 1.0f);
-        alpha_in = ClampFloat(alpha_in, 0.2f, 1.0f);
-
-        if (state.transition < 1.0f) {
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha_out);
-            DrawLoginScreen(state);
-            ImGui::PopStyleVar();
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha_in);
-            DrawLoadingScreen(state, now);
-            ImGui::PopStyleVar();
-        } else {
-            if (state.current == ScreenState::Login) {
-                DrawLoginScreen(state);
-            } else if (state.current == ScreenState::Loading) {
-                DrawLoadingScreen(state, now);
-            } else {
-                DrawMainScreen(state);
-            }
-        }
+        // Force login screen to draw for visibility checks.
+        DrawLoginScreen(state);
 
         ImGui::EndChild();
-
-        DrawDebugOverlay(state, alpha_out, alpha_in, io);
         DrawToasts(state.toasts);
         ImGui::End();
 
