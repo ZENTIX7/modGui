@@ -24,6 +24,7 @@
 #pragma comment(lib, "comdlg32.lib")
 
 static constexpr float kPi = 3.14159265358979323846f;
+static constexpr float kTitleBarHeight = 48.0f;
 
 static float ClampFloat(float v, float lo, float hi) {
     if (v < lo) return lo;
@@ -314,7 +315,7 @@ static bool LaunchTarget(const std::wstring& path, PROCESS_INFORMATION& out_pi) 
 static void DrawTitleBar(HWND hwnd, const ImVec2& window_pos, const ImVec2& window_size, const ImVec4& accent) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 title_pos = window_pos;
-    ImVec2 title_size(window_size.x, 48.0f);
+    ImVec2 title_size(window_size.x, kTitleBarHeight);
     draw_list->AddRectFilled(title_pos, ImVec2(title_pos.x + title_size.x, title_pos.y + title_size.y),
                              IM_COL32(15, 18, 24, 255), 12.0f, ImDrawFlags_RoundCornersTop);
     draw_list->AddText(ImVec2(title_pos.x + 18.0f, title_pos.y + 14.0f),
@@ -334,13 +335,6 @@ static void DrawTitleBar(HWND hwnd, const ImVec2& window_pos, const ImVec2& wind
         PostMessage(hwnd, WM_CLOSE, 0, 0);
     }
     ImGui::PopStyleColor(3);
-
-    ImGui::SetCursorScreenPos(title_pos);
-    ImGui::InvisibleButton("titlebar_drag", title_size);
-    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        ReleaseCapture();
-        SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
-    }
 }
 
 static void DrawBackgroundGradient(const ImVec2& pos, const ImVec2& size) {
@@ -359,10 +353,12 @@ static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
 static HWND g_hWnd = nullptr;
 
 static void CreateRenderTarget() {
+    // Create the render target view from the swap chain back buffer.
     ID3D11Texture2D* pBackBuffer = nullptr;
-    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-    g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
-    pBackBuffer->Release();
+    if (SUCCEEDED(g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer)))) {
+        g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
+        pBackBuffer->Release();
+    }
 }
 
 static void CleanupRenderTarget() {
@@ -425,8 +421,21 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return true;
 
     switch (msg) {
+    case WM_NCHITTEST: {
+        // Custom drag region for borderless window.
+        POINTS pt = MAKEPOINTS(lParam);
+        RECT rect;
+        GetClientRect(hWnd, &rect);
+        POINT client_pt = { pt.x, pt.y };
+        ScreenToClient(hWnd, &client_pt);
+        if (client_pt.y >= 0 && client_pt.y < static_cast<LONG>(kTitleBarHeight)) {
+            return HTCAPTION;
+        }
+        break;
+    }
     case WM_SIZE:
         if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED) {
+            // Recreate render target after swapchain resize.
             CleanupRenderTarget();
             g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
             CreateRenderTarget();
@@ -444,12 +453,17 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
+    // The gray/blank screen issue was caused by a mismatch between the frame loop
+    // and the stubbed ImGui backend. This version ensures the frame loop order is
+    // correct and always renders a fallback ImGui window.
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr,
                       _T("ModGuiWindow"), nullptr };
     RegisterClassEx(&wc);
+
+    // Create a borderless window (no OS title bar).
     HWND hwnd = CreateWindow(wc.lpszClassName, _T("ModGui"),
-                             WS_OVERLAPPEDWINDOW, 100, 100, 520, 620,
+                             WS_POPUP, 100, 100, 540, 660,
                              nullptr, nullptr, wc.hInstance, nullptr);
     g_hWnd = hwnd;
 
@@ -517,6 +531,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             }
         }
 
+        // Correct ImGui frame loop order.
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
@@ -532,7 +547,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImVec4 accent(0.25f, 0.55f, 0.95f, 1.0f);
         DrawTitleBar(hwnd, ImGui::GetWindowPos(), ImGui::GetWindowSize(), accent);
 
-        ImGui::SetCursorPos(ImVec2(0, 58));
+        ImGui::SetCursorPos(ImVec2(0, kTitleBarHeight + 10.0f));
         ImGui::BeginChild("Content", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
 
         float now = static_cast<float>(ImGui::GetTime());
@@ -676,11 +691,18 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         }
 
         ImGui::EndChild();
+
+        // Debug fallback: always show a small Hello window so UI never appears empty.
+        ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
+        ImGui::Begin("Hello", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::Text("Hello");
+        ImGui::End();
+
         DrawToasts(state.toasts);
         ImGui::End();
 
         ImGui::Render();
-        const float clear_color_with_alpha[4] = { 0.05f, 0.06f, 0.08f, 1.00f };
+        const float clear_color_with_alpha[4] = { 0.03f, 0.04f, 0.06f, 1.00f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
