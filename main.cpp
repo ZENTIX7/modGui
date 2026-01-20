@@ -412,7 +412,9 @@ static void DrawLoadingScreen(AppState& state, float now) {
 
     ImGui::SetCursorPos(card_pos);
     ImGui::BeginChild("loading_card", card_size, true);
-    ImVec2 card_pos_abs = ImGui::GetWindowPos() + ImGui::GetCursorPos();
+    ImVec2 window_pos = ImGui::GetWindowPos();
+    ImVec2 cursor_pos = ImGui::GetCursorPos();
+    ImVec2 card_pos_abs(window_pos.x + cursor_pos.x, window_pos.y + cursor_pos.y);
     ImVec2 card_size_abs = ImGui::GetContentRegionAvail();
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 spinner_center(card_pos_abs.x + card_size_abs.x * 0.5f, card_pos_abs.y + 90.0f);
