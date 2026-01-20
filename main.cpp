@@ -345,6 +345,139 @@ static void DrawBackgroundGradient(const ImVec2& pos, const ImVec2& size) {
                                        col_top, col_top, col_bottom, col_bottom);
 }
 
+static void DrawDebugOverlay(const AppState& state, float alpha_out, float alpha_in, const ImGuiIO& io) {
+    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
+    ImGui::Begin("UI DEBUG", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::Text("UI DEBUG: if you see this, ImGui is rendering");
+    ImGui::Text("Current screen: %d", static_cast<int>(state.current));
+    ImGui::Text("Target screen: %d", static_cast<int>(state.target));
+    ImGui::Text("Transition: %.2f", state.transition);
+    ImGui::Text("Alpha out/in: %.2f / %.2f", alpha_out, alpha_in);
+    ImGui::Text("Window size: %.0f x %.0f", ImGui::GetWindowSize().x, ImGui::GetWindowSize().y);
+    ImGui::Text("io.DisplaySize: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
+    ImGui::End();
+}
+
+static void DrawLoginScreen(AppState& state) {
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 card_size(380.0f, 320.0f);
+    ImVec2 card_pos((avail.x - card_size.x) * 0.5f, (avail.y - card_size.y) * 0.5f);
+    if (card_pos.x < 0) card_pos.x = 0;
+    if (card_pos.y < 0) card_pos.y = 0;
+
+    ImGui::SetCursorPos(card_pos);
+    ImGui::BeginChild("login_panel", card_size, true);
+    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "SIGN IN");
+    ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "Best UD Cheats since 2024");
+    ImGui::Separator();
+    ImGui::Text("License Key");
+    ImGuiInputTextFlags flags = state.show_key ? 0 : ImGuiInputTextFlags_Password;
+    ImGui::InputText("##key", state.key_input, IM_ARRAYSIZE(state.key_input), flags);
+    ImGui::SameLine();
+    if (ImGui::Button("Paste")) {
+        if (const char* clip = ImGui::GetClipboardText()) {
+            strncpy_s(state.key_input, clip, IM_ARRAYSIZE(state.key_input) - 1);
+        }
+    }
+    ImGui::Checkbox("Show", &state.show_key);
+    if (ImGui::Button("Sign In", ImVec2(-1, 0))) {
+        if (!state.verifying) {
+            state.verifying = true;
+            state.status_text = "Verifying...";
+            std::string key = state.key_input;
+            std::thread([&state, key]() {
+                VerifyResult res = VerifyKeyOnline(key);
+                std::lock_guard<std::mutex> lock(state.verify_mutex);
+                state.verify_result = res;
+                state.verify_ready.store(true);
+            }).detach();
+        }
+    }
+    ImGui::Checkbox("Remember me", &state.remember_me);
+    if (!state.status_text.empty()) {
+        ImVec4 status_color = state.status_text == "Key declined" ? ImVec4(0.9f, 0.2f, 0.2f, 1.0f)
+            : ImVec4(0.7f, 0.8f, 0.9f, 1.0f);
+        ImGui::TextColored(status_color, "%s", state.status_text.c_str());
+    }
+    ImGui::EndChild();
+}
+
+static void DrawLoadingScreen(AppState& state, float now) {
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 card_size(280.0f, 260.0f);
+    ImVec2 card_pos((avail.x - card_size.x) * 0.5f, (avail.y - card_size.y) * 0.5f);
+    if (card_pos.x < 0) card_pos.x = 0;
+    if (card_pos.y < 0) card_pos.y = 0;
+
+    ImGui::SetCursorPos(card_pos);
+    ImGui::BeginChild("loading_card", card_size, true);
+    ImVec2 card_pos_abs = ImGui::GetWindowPos() + ImGui::GetCursorPos();
+    ImVec2 card_size_abs = ImGui::GetContentRegionAvail();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 spinner_center(card_pos_abs.x + card_size_abs.x * 0.5f, card_pos_abs.y + 90.0f);
+    DrawSpinner(draw_list, spinner_center, 32.0f, 4.0f, now);
+    ImGui::SetCursorPosY(140);
+    ImGui::TextColored(ImVec4(0.7f, 0.75f, 0.85f, 1.0f), "Loading");
+    float elapsed = now - state.loading_start;
+    state.loading_progress = ClampFloat(elapsed / 2.5f, 0.0f, 1.0f);
+    ImGui::ProgressBar(state.loading_progress, ImVec2(-1, 8));
+    if (state.loading_progress >= 1.0f && state.transition >= 1.0f) {
+        StartTransition(state, ScreenState::Main);
+    }
+    ImGui::EndChild();
+}
+
+static void DrawMainScreen(AppState& state) {
+    ImVec2 content = ImGui::GetContentRegionAvail();
+    ImGui::BeginChild("sidebar", ImVec2(140, content.y), true);
+    ImGui::TextColored(ImVec4(0.7f, 0.8f, 1.0f, 1.0f), "Main");
+    ImGui::Separator();
+    ImGui::Text("Dashboard");
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("content_panel", ImVec2(0, content.y), false);
+    ImGui::BeginChild("target_card", ImVec2(0, 140), true);
+    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Target");
+    ImGui::Separator();
+    std::string target_name = state.selected_name.empty() ? "No target selected" : WideToUtf8(state.selected_name);
+    ImGui::Text("Selected: %s", target_name.c_str());
+    bool running = state.has_process && IsProcessRunning(state.target_process);
+    if (running) {
+        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "Running (PID %lu)", state.target_process.dwProcessId);
+    } else {
+        ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "Not running");
+    }
+    if (ImGui::Button("Browse...", ImVec2(120, 0))) {
+        std::wstring path;
+        if (OpenExeDialog(path)) {
+            state.selected_path = path;
+            state.selected_name = GetFileNameFromPath(path);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Launch Target", ImVec2(140, 0))) {
+        if (!state.selected_path.empty()) {
+            if (state.has_process) {
+                CloseHandle(state.target_process.hProcess);
+                CloseHandle(state.target_process.hThread);
+            }
+            PROCESS_INFORMATION pi = {};
+            if (LaunchTarget(state.selected_path, pi)) {
+                state.target_process = pi;
+                state.has_process = true;
+            } else {
+                AddToast(state.toasts, "Failed to launch target", ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
+            }
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Inject", ImVec2(100, 0))) {
+        AddToast(state.toasts, "Injected!", ImVec4(0.2f, 0.9f, 0.3f, 1.0f));
+    }
+    ImGui::EndChild();
+    ImGui::EndChild();
+}
+
 // DirectX/Win32 globals.
 static ID3D11Device* g_pd3dDevice = nullptr;
 static ID3D11DeviceContext* g_pd3dDeviceContext = nullptr;
@@ -424,8 +557,6 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_NCHITTEST: {
         // Custom drag region for borderless window.
         POINTS pt = MAKEPOINTS(lParam);
-        RECT rect;
-        GetClientRect(hWnd, &rect);
         POINT client_pt = { pt.x, pt.y };
         ScreenToClient(hWnd, &client_pt);
         if (client_pt.y >= 0 && client_pt.y < static_cast<LONG>(kTitleBarHeight)) {
@@ -453,9 +584,9 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
-    // The gray/blank screen issue was caused by a mismatch between the frame loop
-    // and the stubbed ImGui backend. This version ensures the frame loop order is
-    // correct and always renders a fallback ImGui window.
+    // Gray/blank screen was caused by not actually rendering ImGui windows when alpha
+    // transitions effectively zeroed them out. This version ensures the login screen
+    // is always drawn and adds a debug overlay every frame.
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr,
                       _T("ModGuiWindow"), nullptr };
@@ -538,7 +669,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::Begin("MainWindow", nullptr,
+        ImGui::Begin("##root", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBringToFrontOnFocus |
                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
 
@@ -559,145 +690,31 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             }
         }
 
-        auto draw_screen = [&](ScreenState screen, float alpha, float offset) {
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
-            ImGui::SetCursorPos(ImGui::GetCursorPos() + ImVec2(offset, 0));
-
-            if (screen == ScreenState::Login) {
-                ImGui::SetCursorPos(ImVec2(0, 40));
-                ImGui::BeginChild("login_card", ImVec2(0, 0), false);
-                ImVec2 center = ImGui::GetContentRegionAvail();
-                ImGui::SetCursorPos(ImVec2(center.x * 0.5f - 180.0f, 40));
-                ImGui::BeginChild("login_panel", ImVec2(360, 360), true);
-                ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "SIGN IN");
-                ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "Best UD Cheats since 2024");
-                ImGui::Separator();
-                ImGui::Text("License Key");
-                ImGuiInputTextFlags flags = state.show_key ? 0 : ImGuiInputTextFlags_Password;
-                ImGui::InputText("##key", state.key_input, IM_ARRAYSIZE(state.key_input), flags);
-                ImGui::SameLine();
-                if (ImGui::Button("Paste")) {
-                    if (const char* clip = ImGui::GetClipboardText()) {
-                        strncpy_s(state.key_input, clip, IM_ARRAYSIZE(state.key_input) - 1);
-                    }
-                }
-                ImGui::Checkbox("Show", &state.show_key);
-                if (ImGui::Button("Sign In", ImVec2(-1, 0))) {
-                    if (!state.verifying) {
-                        state.verifying = true;
-                        state.status_text = "Verifying...";
-                        std::string key = state.key_input;
-                        std::thread([&state, key]() {
-                            VerifyResult res = VerifyKeyOnline(key);
-                            std::lock_guard<std::mutex> lock(state.verify_mutex);
-                            state.verify_result = res;
-                            state.verify_ready.store(true);
-                        }).detach();
-                    }
-                }
-                ImGui::Checkbox("Remember me", &state.remember_me);
-                if (!state.status_text.empty()) {
-                    ImVec4 status_color = state.status_text == "Key declined" ? ImVec4(0.9f, 0.2f, 0.2f, 1.0f)
-                        : ImVec4(0.7f, 0.8f, 0.9f, 1.0f);
-                    ImGui::TextColored(status_color, "%s", state.status_text.c_str());
-                }
-                ImGui::EndChild();
-                ImGui::EndChild();
-            } else if (screen == ScreenState::Loading) {
-                ImGui::SetCursorPos(ImVec2(0, 40));
-                ImGui::BeginChild("loading_panel", ImVec2(0, 0), false);
-                ImVec2 center = ImGui::GetContentRegionAvail();
-                ImVec2 panel_pos(center.x * 0.5f - 140.0f, 120);
-                ImGui::SetCursorPos(panel_pos);
-                ImGui::BeginChild("loading_card", ImVec2(280, 260), true);
-                ImVec2 card_pos = ImGui::GetWindowPos() + ImGui::GetCursorPos();
-                ImVec2 card_size = ImGui::GetContentRegionAvail();
-                ImDrawList* draw_list = ImGui::GetWindowDrawList();
-                ImVec2 spinner_center(card_pos.x + card_size.x * 0.5f, card_pos.y + 90.0f);
-                DrawSpinner(draw_list, spinner_center, 32.0f, 4.0f, now);
-                ImGui::SetCursorPosY(140);
-                ImGui::TextColored(ImVec4(0.7f, 0.75f, 0.85f, 1.0f), "Loading");
-                float elapsed = now - state.loading_start;
-                state.loading_progress = ClampFloat(elapsed / 2.5f, 0.0f, 1.0f);
-                ImGui::ProgressBar(state.loading_progress, ImVec2(-1, 8));
-                if (state.loading_progress >= 1.0f && state.transition >= 1.0f) {
-                    StartTransition(state, ScreenState::Main);
-                }
-                ImGui::EndChild();
-                ImGui::EndChild();
-            } else if (screen == ScreenState::Main) {
-                ImGui::BeginChild("main_layout", ImVec2(0, 0), false);
-                ImVec2 content = ImGui::GetContentRegionAvail();
-                ImGui::BeginChild("sidebar", ImVec2(140, content.y), true);
-                ImGui::TextColored(ImVec4(0.7f, 0.8f, 1.0f, 1.0f), "Main");
-                ImGui::Separator();
-                ImGui::Text("Dashboard");
-                ImGui::EndChild();
-                ImGui::SameLine();
-                ImGui::BeginChild("content_panel", ImVec2(0, content.y), false);
-                ImGui::BeginChild("target_card", ImVec2(0, 140), true);
-                ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Target");
-                ImGui::Separator();
-                std::string target_name = state.selected_name.empty() ? "No target selected" : WideToUtf8(state.selected_name);
-                ImGui::Text("Selected: %s", target_name.c_str());
-                bool running = state.has_process && IsProcessRunning(state.target_process);
-                if (running) {
-                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.3f, 1.0f), "Running (PID %lu)", state.target_process.dwProcessId);
-                } else {
-                    ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "Not running");
-                }
-                if (ImGui::Button("Browse...", ImVec2(120, 0))) {
-                    std::wstring path;
-                    if (OpenExeDialog(path)) {
-                        state.selected_path = path;
-                        state.selected_name = GetFileNameFromPath(path);
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Launch Target", ImVec2(140, 0))) {
-                    if (!state.selected_path.empty()) {
-                        if (state.has_process) {
-                            CloseHandle(state.target_process.hProcess);
-                            CloseHandle(state.target_process.hThread);
-                        }
-                        PROCESS_INFORMATION pi = {};
-                        if (LaunchTarget(state.selected_path, pi)) {
-                            state.target_process = pi;
-                            state.has_process = true;
-                        } else {
-                            AddToast(state.toasts, "Failed to launch target", ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-                        }
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Inject", ImVec2(100, 0))) {
-                    AddToast(state.toasts, "Injected!", ImVec4(0.2f, 0.9f, 0.3f, 1.0f));
-                }
-                ImGui::EndChild();
-                ImGui::EndChild();
-                ImGui::EndChild();
-            }
-
-            ImGui::PopStyleVar();
-        };
+        float alpha_out = (state.transition < 1.0f) ? (1.0f - state.transition) : 1.0f;
+        float alpha_in = (state.transition < 1.0f) ? state.transition : 1.0f;
+        alpha_out = ClampFloat(alpha_out, 0.2f, 1.0f);
+        alpha_in = ClampFloat(alpha_in, 0.2f, 1.0f);
 
         if (state.transition < 1.0f) {
-            float alpha_out = 1.0f - state.transition;
-            float alpha_in = state.transition;
-            draw_screen(state.current, alpha_out, -40.0f * state.transition);
-            draw_screen(state.target, alpha_in, 40.0f * (1.0f - state.transition));
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha_out);
+            DrawLoginScreen(state);
+            ImGui::PopStyleVar();
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha_in);
+            DrawLoadingScreen(state, now);
+            ImGui::PopStyleVar();
         } else {
-            draw_screen(state.current, 1.0f, 0.0f);
+            if (state.current == ScreenState::Login) {
+                DrawLoginScreen(state);
+            } else if (state.current == ScreenState::Loading) {
+                DrawLoadingScreen(state, now);
+            } else {
+                DrawMainScreen(state);
+            }
         }
 
         ImGui::EndChild();
 
-        // Debug fallback: always show a small Hello window so UI never appears empty.
-        ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
-        ImGui::Begin("Hello", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::Text("Hello");
-        ImGui::End();
-
+        DrawDebugOverlay(state, alpha_out, alpha_in, io);
         DrawToasts(state.toasts);
         ImGui::End();
 
