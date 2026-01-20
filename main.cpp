@@ -11,6 +11,7 @@
 #include <atomic>
 #include <mutex>
 #include <chrono>
+#include <cmath>
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -106,7 +107,7 @@ static void DrawToasts(std::vector<Toast>& toasts) {
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
         ImGui::TextColored(ImVec4(toast.color.x, toast.color.y, toast.color.z, alpha), "%s", toast.message.c_str());
-        y_offset += ImGui::GetWindowHeight() + 8.0f;
+        y_offset += ImGui::GetWindowSize().y + 8.0f;
         ImGui::End();
     }
 }
@@ -260,8 +261,12 @@ static void DrawSpinner(ImDrawList* draw_list, const ImVec2& center, float radiu
     for (int i = 0; i < num_segments; ++i) {
         float a0 = start + (end - start) * (static_cast<float>(i) / num_segments);
         float a1 = start + (end - start) * (static_cast<float>(i + 1) / num_segments);
-        draw_list->PathLineTo(ImVec2(center.x + std::cos(a0) * radius, center.y + std::sin(a0) * radius));
-        draw_list->PathLineTo(ImVec2(center.x + std::cos(a1) * radius, center.y + std::sin(a1) * radius));
+        float ca0 = static_cast<float>(std::cos(a0));
+        float sa0 = static_cast<float>(std::sin(a0));
+        float ca1 = static_cast<float>(std::cos(a1));
+        float sa1 = static_cast<float>(std::sin(a1));
+        draw_list->PathLineTo(ImVec2(center.x + ca0 * radius, center.y + sa0 * radius));
+        draw_list->PathLineTo(ImVec2(center.x + ca1 * radius, center.y + sa1 * radius));
     }
     draw_list->PathStroke(IM_COL32(120, 180, 255, 200), false, thickness);
 }
@@ -340,8 +345,8 @@ static void DrawTitleBar(HWND hwnd, const ImVec2& window_pos, const ImVec2& wind
 
 static void DrawBackgroundGradient(const ImVec2& pos, const ImVec2& size) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    ImU32 col_top = IM_COL32(10, 12, 18, 255);
-    ImU32 col_bottom = IM_COL32(5, 8, 12, 255);
+    unsigned int col_top = IM_COL32(10, 12, 18, 255);
+    unsigned int col_bottom = IM_COL32(5, 8, 12, 255);
     draw_list->AddRectFilledMultiColor(pos, ImVec2(pos.x + size.x, pos.y + size.y),
                                        col_top, col_top, col_bottom, col_bottom);
 }
@@ -590,7 +595,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 ImVec2 panel_pos(center.x * 0.5f - 140.0f, 120);
                 ImGui::SetCursorPos(panel_pos);
                 ImGui::BeginChild("loading_card", ImVec2(280, 260), true);
-                ImVec2 card_pos = ImGui::GetCursorScreenPos();
+                ImVec2 card_pos = ImGui::GetWindowPos() + ImGui::GetCursorPos();
                 ImVec2 card_size = ImGui::GetContentRegionAvail();
                 ImDrawList* draw_list = ImGui::GetWindowDrawList();
                 ImVec2 spinner_center(card_pos.x + card_size.x * 0.5f, card_pos.y + 90.0f);
