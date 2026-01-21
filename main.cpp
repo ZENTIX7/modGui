@@ -136,7 +136,7 @@ static VerifyResult VerifyKeyOnline(const std::string& key) {
     std::string query = std::string(kVerifyPathPrefix) + UrlEncode(key);
     std::wstring path = Utf8ToWide(query);
 
-    HINTERNET session = WinHttpOpen(L"ModGui/1.0",
+    HINTERNET session = WinHttpOpen(L"NitroMod/1.0",
                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                     WINHTTP_NO_PROXY_NAME,
                                     WINHTTP_NO_PROXY_BYPASS, 0);
@@ -312,25 +312,35 @@ static bool LaunchTarget(const std::wstring& path, PROCESS_INFORMATION& out_pi) 
     return false;
 }
 
+static void DrawCardGlow(const ImVec2& min_pos, const ImVec2& max_pos, float rounding) {
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    for (int i = 0; i < 6; ++i) {
+        float expand = 6.0f + i * 4.0f;
+        float alpha = 0.10f - i * 0.012f;
+        if (alpha <= 0.0f) continue;
+        ImU32 col = IM_COL32(80, 140, 255, static_cast<int>(alpha * 255.0f));
+        draw_list->AddRectFilled(
+            ImVec2(min_pos.x - expand, min_pos.y - expand),
+            ImVec2(max_pos.x + expand, max_pos.y + expand),
+            col, rounding + expand);
+    }
+}
+
 static void DrawTitleBar(HWND hwnd, const ImVec2& window_pos, const ImVec2& window_size, const ImVec4& accent) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 title_pos = window_pos;
     ImVec2 title_size(window_size.x, kTitleBarHeight);
     draw_list->AddRectFilled(title_pos, ImVec2(title_pos.x + title_size.x, title_pos.y + title_size.y),
-                             IM_COL32(15, 18, 24, 255), 12.0f, ImDrawFlags_RoundCornersTop);
+                             IM_COL32(12, 14, 20, 255), 12.0f, ImDrawFlags_RoundCornersTop);
     draw_list->AddText(ImVec2(title_pos.x + 18.0f, title_pos.y + 14.0f),
-                       IM_COL32(200, 230, 255, 255), "LITHIUM.RIP");
-    draw_list->AddCircleFilled(ImVec2(title_pos.x + 6.0f, title_pos.y + 22.0f), 6.0f,
+                       IM_COL32(200, 230, 255, 255), "NITRO MOD");
+    draw_list->AddCircleFilled(ImVec2(title_pos.x + 6.0f, title_pos.y + 22.0f), 5.0f,
                                ImGui::ColorConvertFloat4ToU32(accent));
 
-    ImGui::SetCursorScreenPos(ImVec2(title_pos.x + window_size.x - 60.0f, title_pos.y + 12.0f));
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(45, 50, 60, 255));
+    ImGui::SetCursorScreenPos(ImVec2(title_pos.x + window_size.x - 32.0f, title_pos.y + 12.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(40, 45, 55, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70, 80, 95, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(90, 100, 115, 255));
-    if (ImGui::Button("-", ImVec2(20, 20))) {
-        ShowWindow(hwnd, SW_MINIMIZE);
-    }
-    ImGui::SameLine();
     if (ImGui::Button("x", ImVec2(20, 20))) {
         PostMessage(hwnd, WM_CLOSE, 0, 0);
     }
@@ -339,48 +349,61 @@ static void DrawTitleBar(HWND hwnd, const ImVec2& window_pos, const ImVec2& wind
 
 static void DrawBackgroundGradient(const ImVec2& pos, const ImVec2& size) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    unsigned int col_top = IM_COL32(10, 12, 18, 255);
-    unsigned int col_bottom = IM_COL32(5, 8, 12, 255);
+    ImU32 col_top = IM_COL32(10, 12, 18, 255);
+    ImU32 col_bottom = IM_COL32(6, 8, 12, 255);
     draw_list->AddRectFilledMultiColor(pos, ImVec2(pos.x + size.x, pos.y + size.y),
                                        col_top, col_top, col_bottom, col_bottom);
+    ImU32 vignette = IM_COL32(0, 0, 0, 120);
+    draw_list->AddRectFilledMultiColor(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                                       vignette, vignette, IM_COL32(0, 0, 0, 180), IM_COL32(0, 0, 0, 180));
 }
 
-static void DrawDebugOverlay(const AppState& state, bool transition_active, float transition_t, float alpha_out, float alpha_in, const ImGuiIO& io) {
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(340, 180), ImGuiCond_Always);
-    ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_NoSavedSettings);
-    ImGui::Text("IMGUI DEBUG: YOU SHOULD SEE THIS");
-    ImGui::Text("io.DisplaySize: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
-    ImGui::Text("io.DeltaTime: %.4f", io.DeltaTime);
-    ImGui::Text("current screen: %d", static_cast<int>(state.current));
-    ImGui::Text("transition.active: %s", transition_active ? "true" : "false");
-    ImGui::Text("transition.t: %.2f", transition_t);
-    ImGui::Text("alpha out/in: %.2f / %.2f", alpha_out, alpha_in);
-    ImGui::End();
+static void DrawToggleSwitch(const char* id, bool* value) {
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    float height = 20.0f;
+    float width = 38.0f;
+    float radius = height * 0.5f;
+    ImGui::InvisibleButton(id, ImVec2(width, height));
+    if (ImGui::IsItemClicked()) {
+        *value = !*value;
+    }
+    ImU32 bg_col = *value ? IM_COL32(70, 140, 255, 255) : IM_COL32(70, 75, 90, 255);
+    ImU32 knob_col = IM_COL32(230, 235, 245, 255);
+    draw_list->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), bg_col, radius);
+    float knob_x = *value ? (pos.x + width - radius) : (pos.x + radius);
+    draw_list->AddCircleFilled(ImVec2(knob_x, pos.y + radius), radius - 2.0f, knob_col);
 }
 
-static void DrawLoginScreen(AppState& state) {
+static void DrawLoginScreen(AppState& state, ImFont* title_font) {
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImVec2 card_size(380.0f, 320.0f);
     ImVec2 card_pos((avail.x - card_size.x) * 0.5f, (avail.y - card_size.y) * 0.5f);
     if (card_pos.x < 0) card_pos.x = 0;
     if (card_pos.y < 0) card_pos.y = 0;
 
+    ImVec2 window_pos = ImGui::GetWindowPos();
+    ImVec2 card_min(window_pos.x + card_pos.x, window_pos.y + card_pos.y);
+    ImVec2 card_max(card_min.x + card_size.x, card_min.y + card_size.y);
+    DrawCardGlow(card_min, card_max, 12.0f);
+
     ImGui::SetCursorPos(card_pos);
     ImGui::BeginChild("login_panel", card_size, true);
-    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "SIGN IN");
-    ImGui::TextColored(ImVec4(0.6f, 0.65f, 0.75f, 1.0f), "Best UD Cheats since 2024");
-    ImGui::Separator();
+    ImGui::PushFont(title_font);
+    ImGui::SetCursorPosX((card_size.x - ImGui::CalcTextSize("SIGN IN").x) * 0.5f);
+    ImGui::Text("SIGN IN");
+    ImGui::PopFont();
+    ImGui::Spacing();
+
     ImGui::Text("License Key");
+    ImGui::SetNextItemWidth(card_size.x - 48.0f);
     ImGuiInputTextFlags flags = state.show_key ? 0 : ImGuiInputTextFlags_Password;
     ImGui::InputText("##key", state.key_input, IM_ARRAYSIZE(state.key_input), flags);
     ImGui::SameLine();
-    if (ImGui::Button("Paste")) {
-        if (const char* clip = ImGui::GetClipboardText()) {
-            strncpy_s(state.key_input, clip, IM_ARRAYSIZE(state.key_input) - 1);
-        }
+    if (ImGui::Button("\xF0\x9F\x94\x91", ImVec2(32, 0))) {
+        state.show_key = !state.show_key;
     }
-    ImGui::Checkbox("Show", &state.show_key);
+
     if (ImGui::Button("Sign In", ImVec2(-1, 0))) {
         if (!state.verifying) {
             state.verifying = true;
@@ -394,7 +417,11 @@ static void DrawLoginScreen(AppState& state) {
             }).detach();
         }
     }
-    ImGui::Checkbox("Remember me", &state.remember_me);
+
+    ImGui::Text("Remember me");
+    ImGui::SameLine(card_size.x - 48.0f);
+    DrawToggleSwitch("##remember", &state.remember_me);
+
     if (!state.status_text.empty()) {
         ImVec4 status_color = state.status_text == "Key declined" ? ImVec4(0.9f, 0.2f, 0.2f, 1.0f)
             : ImVec4(0.7f, 0.8f, 0.9f, 1.0f);
@@ -489,14 +516,10 @@ static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
 static HWND g_hWnd = nullptr;
 
 static void CreateRenderTarget() {
-    // Create the render target view from the swap chain back buffer.
     ID3D11Texture2D* pBackBuffer = nullptr;
     if (SUCCEEDED(g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer)))) {
         g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
         pBackBuffer->Release();
-    }
-    if (!g_mainRenderTargetView) {
-        OutputDebugStringA("RenderTargetView is null after CreateRenderTarget\n");
     }
 }
 
@@ -561,7 +584,6 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     switch (msg) {
     case WM_NCHITTEST: {
-        // Custom drag region for borderless window.
         POINTS pt = MAKEPOINTS(lParam);
         POINT client_pt = { pt.x, pt.y };
         ScreenToClient(hWnd, &client_pt);
@@ -572,14 +594,13 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
     case WM_SIZE:
         if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED) {
-            // Recreate render target after swapchain resize.
             CleanupRenderTarget();
             g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
             CreateRenderTarget();
         }
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+        if ((wParam & 0xfff0) == SC_KEYMENU)
             return 0;
         break;
     case WM_DESTROY:
@@ -590,17 +611,13 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
-    // Gray/blank screen was caused by not actually rendering ImGui windows when alpha
-    // transitions effectively zeroed them out. This version enforces a debug overlay
-    // and disables transitions until UI is visible.
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L,
                       GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr,
-                      _T("ModGuiWindow"), nullptr };
+                      _T("Nitro Mod"), nullptr };
     RegisterClassEx(&wc);
 
-    // Create a borderless window (no OS title bar).
-    HWND hwnd = CreateWindow(wc.lpszClassName, _T("ModGui"),
-                             WS_POPUP, 100, 100, 540, 660,
+    HWND hwnd = CreateWindow(wc.lpszClassName, _T("Nitro Mod"),
+                             WS_POPUP, 100, 100, 560, 700,
                              nullptr, nullptr, wc.hInstance, nullptr);
     g_hWnd = hwnd;
 
@@ -625,11 +642,27 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 12.0f;
-    style.FrameRounding = 8.0f;
-    style.ChildRounding = 10.0f;
-    style.PopupRounding = 8.0f;
+    style.FrameRounding = 10.0f;
+    style.ChildRounding = 12.0f;
+    style.PopupRounding = 10.0f;
     style.WindowPadding = ImVec2(20, 20);
     style.ItemSpacing = ImVec2(12, 12);
+    style.AntiAliasedLines = true;
+    style.AntiAliasedFill = true;
+
+    ImFontConfig font_cfg;
+    font_cfg.OversampleH = 3;
+    font_cfg.OversampleV = 2;
+    font_cfg.RasterizerMultiply = 1.1f;
+    ImFont* font_regular = nullptr;
+    ImFont* font_title = nullptr;
+    const char* font_path = "C:/Windows/Fonts/segoeui.ttf";
+    font_regular = io.Fonts->AddFontFromFileTTF(font_path, 17.0f, &font_cfg);
+    font_title = io.Fonts->AddFontFromFileTTF(font_path, 24.0f, &font_cfg);
+    if (!font_regular || !font_title) {
+        font_regular = io.Fonts->AddFontDefault();
+        font_title = font_regular;
+    }
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
@@ -668,21 +701,10 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             }
         }
 
-        // Correct ImGui frame loop order.
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Force transition inactive until UI is confirmed visible.
-        bool transition_active = false;
-        float transition_t = 1.0f;
-        float alpha_out = 1.0f;
-        float alpha_in = 1.0f;
-
-        // DEBUG WINDOW (always visible)
-        DrawDebugOverlay(state, transition_active, transition_t, alpha_out, alpha_in, io);
-
-        // MAIN UI
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
         ImGui::Begin("##root", nullptr,
@@ -697,8 +719,36 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui::SetCursorPos(ImVec2(0, kTitleBarHeight + 10.0f));
         ImGui::BeginChild("Content", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
 
-        // Force login screen to draw for visibility checks.
-        DrawLoginScreen(state);
+        float now = static_cast<float>(ImGui::GetTime());
+        if (state.transition < 1.0f) {
+            float t = (now - state.transition_start) / 0.35f;
+            state.transition = ClampFloat(t, 0.0f, 1.0f);
+            if (state.transition >= 1.0f) {
+                state.current = state.target;
+            }
+        }
+
+        float alpha_out = (state.transition < 1.0f) ? (1.0f - state.transition) : 1.0f;
+        float alpha_in = (state.transition < 1.0f) ? state.transition : 1.0f;
+        alpha_out = ClampFloat(alpha_out, 0.15f, 1.0f);
+        alpha_in = ClampFloat(alpha_in, 0.15f, 1.0f);
+
+        if (state.transition < 1.0f) {
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha_out);
+            DrawLoginScreen(state, font_title);
+            ImGui::PopStyleVar();
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha_in);
+            DrawLoadingScreen(state, now);
+            ImGui::PopStyleVar();
+        } else {
+            if (state.current == ScreenState::Login) {
+                DrawLoginScreen(state, font_title);
+            } else if (state.current == ScreenState::Loading) {
+                DrawLoadingScreen(state, now);
+            } else {
+                DrawMainScreen(state);
+            }
+        }
 
         ImGui::EndChild();
         DrawToasts(state.toasts);
